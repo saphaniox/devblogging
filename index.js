@@ -4,15 +4,15 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const cloudinary = require("cloudinary").v2;
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// CORS configuration
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: process.env.FRONTEND_URL || "http://localhost:3001",
   credentials: true,
 };
 app.use(cors(corsOptions));
@@ -20,6 +20,7 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// MongoDB connection
 mongoose.connect(process.env.MONGODB_URI || "", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -27,26 +28,30 @@ mongoose.connect(process.env.MONGODB_URI || "", {
 .then(() => console.log("MongoDB connected successfully"))
 .catch(err => console.error("MongoDB connection error:", err));
 
+// Cloudinary configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: "blog-images",
-    format: async (req, file) => "png",
-    public_id: (req, file) => {
-      const filename = Date.now() + "-" + Math.round(Math.random() * 1E9);
-      return filename;
-    },
+// Use memory storage instead of CloudinaryStorage
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
   },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
 });
 
-const upload = multer({ storage: storage });
-
+// User Schema
 const UserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
@@ -55,6 +60,7 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", UserSchema);
 
+// BlogPost Schema
 const BlogPostSchema = new mongoose.Schema({
   title: { type: String, required: true },
   subtitle: { type: String },
@@ -65,6 +71,29 @@ const BlogPostSchema = new mongoose.Schema({
 
 const BlogPost = mongoose.model("BlogPost", BlogPostSchema);
 
+// Helper function to upload image to Cloudinary
+const uploadToCloudinary = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'image',
+        folder: 'blog-images',
+        format: 'png',
+        public_id: `blog-${Date.now()}-${Math.round(Math.random() * 1E9)}`,
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+    uploadStream.end(buffer);
+  });
+};
+
+// Helper function to get token from header
 const getTokenFromHeader = (req) => {
   const header = req.headers["authorization"] || req.headers["Authorization"];
   if (!header) return null;
@@ -73,6 +102,7 @@ const getTokenFromHeader = (req) => {
   return parts[1];
 };
 
+// Authentication middleware
 const authenticateToken = (req, res, next) => {
   const token = getTokenFromHeader(req);
 
@@ -89,7 +119,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-
+// Auth routes
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const { username, email, password } = req.body;
@@ -138,7 +168,11 @@ app.post("/api/auth/login", async (req, res) => {
       { expiresIn: "24h" }
     );
 
-    res.json({ message: "Login successful", token, user: { id: user._id, username: user.username, email: user.email } });
+    res.json({ 
+      message: "Login successful", 
+      token, 
+      user: { id: user._id, username: user.username, email: user.email } 
+    });
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ message: "Server error during login" });
@@ -161,6 +195,7 @@ app.get("/api/auth/verify", authenticateToken, async (req, res) => {
   }
 });
 
+// Blog post routes
 app.get("/api/posts", async (req, res) => {
   try {
     const posts = await BlogPost.find()
@@ -191,8 +226,14 @@ app.post("/api/posts", authenticateToken, upload.single("image"), async (req, re
     const { title, subtitle, content } = req.body;
     let imageUrl = "";
 
+    // Upload image to Cloudinary if present
     if (req.file) {
-      imageUrl = req.file.path;
+      try {
+        imageUrl = await uploadToCloudinary(req.file.buffer);
+      } catch (uploadError) {
+        console.error("Cloudinary upload error:", uploadError);
+        return res.status(500).json({ message: "Failed to upload image" });
+      }
     }
 
     const newPost = new BlogPost({
@@ -227,8 +268,15 @@ app.put("/api/posts/:id", authenticateToken, upload.single("image"), async (req,
     }
 
     let imageUrl = post.imageUrl;
+    
+    // Upload new image if present
     if (req.file) {
-      imageUrl = req.file.path;
+      try {
+        imageUrl = await uploadToCloudinary(req.file.buffer);
+      } catch (uploadError) {
+        console.error("Cloudinary upload error:", uploadError);
+        return res.status(500).json({ message: "Failed to upload image" });
+      }
     }
 
     const updatedPost = await BlogPost.findByIdAndUpdate(
@@ -262,6 +310,11 @@ app.delete("/api/posts/:id", authenticateToken, async (req, res) => {
     console.error("Error deleting post:", error);
     res.status(500).json({ message: "Server error deleting post" });
   }
+});
+
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
 app.listen(PORT, () => {
