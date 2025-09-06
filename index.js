@@ -21,10 +21,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || "", {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+mongoose.connect(process.env.MONGODB_URI)
 .then(() => console.log("MongoDB connected successfully"))
 .catch(err => console.error("MongoDB connection error:", err));
 
@@ -35,7 +32,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Use memory storage instead of CloudinaryStorage
+//memory storage
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
@@ -71,7 +68,7 @@ const BlogPostSchema = new mongoose.Schema({
 
 const BlogPost = mongoose.model("BlogPost", BlogPostSchema);
 
-// Helper function to upload image to Cloudinary
+// function to upload image
 const uploadToCloudinary = (buffer) => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -93,7 +90,7 @@ const uploadToCloudinary = (buffer) => {
   });
 };
 
-// Helper function to get token from header
+// function to get token
 const getTokenFromHeader = (req) => {
   const header = req.headers["authorization"] || req.headers["Authorization"];
   if (!header) return null;
@@ -226,7 +223,7 @@ app.post("/api/posts", authenticateToken, upload.single("image"), async (req, re
     const { title, subtitle, content } = req.body;
     let imageUrl = "";
 
-    // Upload image to Cloudinary if present
+    // Upload image
     if (req.file) {
       try {
         imageUrl = await uploadToCloudinary(req.file.buffer);
